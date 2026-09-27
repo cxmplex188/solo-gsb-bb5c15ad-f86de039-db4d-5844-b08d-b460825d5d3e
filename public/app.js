@@ -24,6 +24,7 @@ const $ = (sel) => document.querySelector(sel);
 
 let session = null;          // { id, numTrials, recoveryToken }
 let answers = [];            // 每题 'A' | 'B' | null
+let confidences = [];        // 每题把握度：50/60/…/100 | null
 let currentTrial = 0;
 
 // ---------------------------------------------------------------------------
@@ -478,25 +479,31 @@ function renderTrial() {
   const ans = answers[currentTrial];
   $('#btnAnsA').classList.toggle('selected', ans === 'A');
   $('#btnAnsB').classList.toggle('selected', ans === 'B');
+  document.querySelectorAll('.conf-btn').forEach((b) => {
+    b.classList.toggle('selected', confidences[currentTrial] === Number(b.dataset.conf));
+  });
 
-  // 进度圆点
+  // 进度圆点：答案与把握度齐全才算完成，只有一项为半完成
   const progress = $('#progress');
   progress.innerHTML = '';
   for (let i = 0; i < session.numTrials; i++) {
     const dot = document.createElement('button');
     dot.className = 'dot';
-    if (answers[i]) dot.classList.add('done');
+    const done = Boolean(answers[i]) && confidences[i] != null;
+    const partial = Boolean(answers[i]) !== (confidences[i] != null);
+    if (done) dot.classList.add('done');
+    else if (partial) dot.classList.add('partial');
     if (i === currentTrial) dot.classList.add('current');
     dot.textContent = i + 1;
     dot.addEventListener('click', () => loadTrial(i));
     progress.appendChild(dot);
   }
 
-  const allAnswered = answers.every(Boolean);
-  $('#btnSubmit').disabled = !allAnswered;
-  $('#btnSubmit').textContent = allAnswered
+  const incomplete = answers.filter((a, i) => !a || confidences[i] == null).length;
+  $('#btnSubmit').disabled = incomplete > 0;
+  $('#btnSubmit').textContent = incomplete === 0
     ? '提交并揭晓答案'
-    : `提交并揭晓答案（还剩 ${answers.filter((a) => !a).length} 题未答）`;
+    : `提交并揭晓答案（还有 ${incomplete} 题未完成）`;
 }
 
 function tick() {
@@ -592,6 +599,7 @@ $('#btnStart').addEventListener('click', async () => {
 
     session = data;
     answers = Array(data.numTrials).fill(null);
+    confidences = Array(data.numTrials).fill(null);
     currentTrial = 0;
     xCache.clear();
     saveRecovery(); // 保存恢复标识，刷新/重开页面可找回本会话
@@ -625,9 +633,11 @@ async function initRecovery() {
       token: saved.token,
       trial: Math.min(Math.max(0, saved.trial | 0), data.numTrials - 1),
     };
-    const answered = data.answers.filter(Boolean).length;
+    const answered = data.answers.filter(
+      (a, i) => a && data.confidences[i] != null,
+    ).length;
     $('#resumeInfo').textContent =
-      `检测到本机有未提交的测试：共 ${data.numTrials} 题，已答 ${answered} 题，` +
+      `检测到本机有未提交的测试：共 ${data.numTrials} 题，已完成 ${answered} 题，` +
       `上次进行到第 ${pendingResume.trial + 1} 题。`;
     $('#view-resume').classList.remove('hidden');
   } catch (_) {
@@ -648,6 +658,7 @@ $('#btnResume').addEventListener('click', async () => {
       recoveryToken: resume.token,
     };
     answers = resume.answers.slice();
+    confidences = resume.confidences.slice();
     currentTrial = resume.trial;
     xCache.clear();
     await enterTest();
@@ -738,13 +749,16 @@ $('#crossfadeMs').addEventListener('change', (e) => {
 $('#btnPrev').addEventListener('click', () => { if (currentTrial > 0) loadTrial(currentTrial - 1); });
 $('#btnNext').addEventListener('click', () => { if (currentTrial < session.numTrials - 1) loadTrial(currentTrial + 1); });
 
-async function sendAnswer(val) {
-  answers[currentTrial] = val;
+// 答案与把握度一起保存到服务端：任一项变更即把本题当前已选内容一并提交
+async function saveTrial() {
   renderTrial();
+  const payload = { trial: currentTrial };
+  if (answers[currentTrial]) payload.answer = answers[currentTrial];
+  if (confidences[currentTrial] != null) payload.confidence = confidences[currentTrial];
   const res = await fetch(`/api/session/${session.id}/answer`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ trial: currentTrial, answer: val }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -752,8 +766,20 @@ async function sendAnswer(val) {
   }
 }
 
-$('#btnAnsA').addEventListener('click', () => sendAnswer('A'));
-$('#btnAnsB').addEventListener('click', () => sendAnswer('B'));
+$('#btnAnsA').addEventListener('click', () => {
+  answers[currentTrial] = 'A';
+  saveTrial();
+});
+$('#btnAnsB').addEventListener('click', () => {
+  answers[currentTrial] = 'B';
+  saveTrial();
+});
+document.querySelectorAll('.conf-btn').forEach((b) => {
+  b.addEventListener('click', () => {
+    confidences[currentTrial] = Number(b.dataset.conf);
+    saveTrial();
+  });
+});
 
 $('#btnSubmit').addEventListener('click', async () => {
   if (!confirm('提交后将一次性揭晓全部答案，且不可再修改。确定提交？')) return;
@@ -775,6 +801,7 @@ $('#btnAgain').addEventListener('click', async () => {
   }
   session = null;
   answers = [];
+  confidences = [];
   xCache.clear();
   clearRecovery();
   buffers.A = buffers.B = buffers.X = null;
@@ -805,10 +832,105 @@ function showResults(results) {
     tr.className = d.correct ? 'right' : 'wrong';
     tr.innerHTML =
       `<td>${d.trial}</td><td>${d.x}</td><td>${d.answer}</td>` +
+      `<td>${d.confidence}%</td>` +
       `<td>${d.correct ? '✓ 正确' : '✗ 错误'}</td>`;
     tbody.appendChild(tr);
   }
+  renderCalibration(results.calibration);
   show('view-result');
+}
+
+// ---------------------------------------------------------------------------
+// 把握度校准：同一 0～100% 横轴上绘制把握度标记、正确率点与 95% 精确区间
+// ---------------------------------------------------------------------------
+
+function renderCalibration(calibration) {
+  const chart = $('#calibChart');
+  chart.innerHTML = '';
+  const tbody = $('#calibTable tbody');
+  tbody.innerHTML = '';
+
+  for (const row of calibration) {
+    // ---- 图：每档一行，横轴统一为 0～100% ----
+    const rowEl = document.createElement('div');
+    rowEl.className = 'calib-row';
+    const label = document.createElement('span');
+    label.className = 'calib-label';
+    label.textContent = `${row.confidence}%`;
+    const track = document.createElement('div');
+    track.className = 'calib-track';
+
+    if (row.n === 0) {
+      track.classList.add('empty');
+      const empty = document.createElement('span');
+      empty.className = 'calib-empty';
+      empty.textContent = '无数据';
+      track.appendChild(empty);
+    } else {
+      const [lo, hi] = row.ci;
+      const ci = document.createElement('div');
+      ci.className = 'calib-ci';
+      ci.style.left = `${lo * 100}%`;
+      ci.style.width = `${(hi - lo) * 100}%`;
+      ci.title = `95% 精确置信区间 [${(lo * 100).toFixed(1)}%, ${(hi * 100).toFixed(1)}%]`;
+
+      const acc = document.createElement('div');
+      acc.className = 'calib-acc';
+      acc.style.left = `${row.accuracy * 100}%`;
+      acc.title = `实际正确率 ${(row.accuracy * 100).toFixed(1)}%（${row.k}/${row.n}）`;
+
+      const conf = document.createElement('div');
+      // 把握度未落入区间 → 突出显示（标红）
+      conf.className = row.covered ? 'calib-conf' : 'calib-conf off';
+      conf.style.left = `${row.confidence}%`;
+      conf.title = row.covered
+        ? `自评把握度 ${row.confidence}%，落入区间`
+        : `自评把握度 ${row.confidence}%，未落入区间（${row.confidence / 100 > hi ? '过度自信' : '信心不足'}）`;
+
+      track.append(ci, acc, conf);
+    }
+    rowEl.append(label, track);
+    chart.appendChild(rowEl);
+
+    // ---- 表：分档数值 ----
+    const tr = document.createElement('tr');
+    if (row.n === 0) {
+      tr.innerHTML = `<td>${row.confidence}%</td><td>0</td><td colspan="3">无数据</td>`;
+    } else {
+      if (!row.covered) tr.className = 'miscal';
+      const [lo, hi] = row.ci;
+      tr.innerHTML =
+        `<td>${row.confidence}%</td><td>${row.n}</td><td>${row.k}</td>` +
+        `<td>${(row.accuracy * 100).toFixed(1)}%</td>` +
+        `<td>[${(lo * 100).toFixed(1)}%, ${(hi * 100).toFixed(1)}%]</td>`;
+    }
+    tbody.appendChild(tr);
+  }
+
+  // 共用横轴：刻度每 10%，标签每 20%
+  const axisRow = document.createElement('div');
+  axisRow.className = 'calib-row';
+  const spacer = document.createElement('span');
+  spacer.className = 'calib-label';
+  const axis = document.createElement('div');
+  axis.className = 'calib-axis';
+  for (let v = 0; v <= 100; v += 10) {
+    const tick = document.createElement('div');
+    tick.className = 'calib-tick';
+    tick.style.left = `${v}%`;
+    axis.appendChild(tick);
+    if (v % 20 === 0) {
+      const lab = document.createElement('span');
+      lab.className = 'calib-tick-label';
+      lab.style.left = `${v}%`;
+      lab.textContent = `${v}%`;
+      if (v === 0) lab.style.transform = 'none';
+      else if (v === 100) lab.style.transform = 'translateX(-100%)';
+      axis.appendChild(lab);
+    }
+  }
+  axisRow.append(spacer, axis);
+  chart.appendChild(axisRow);
 }
 
 // 启动 UI 刷新循环，并探测本机是否有可恢复的未提交会话

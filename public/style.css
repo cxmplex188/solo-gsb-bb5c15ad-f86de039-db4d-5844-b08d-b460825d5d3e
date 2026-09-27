@@ -280,6 +280,22 @@ input[type="range"] {
   color: #fff;
 }
 
+/* 把握度选择 */
+.conf-title { margin: 0.9rem 0 0.5rem !important; }
+
+.conf-btns {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.4rem;
+}
+
+.conf-btns button { padding: 0.55rem 0; font-weight: 600; font-size: 0.9rem; }
+.conf-btns button.selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
 /* 进度圆点 */
 .progress {
   display: flex;
@@ -296,6 +312,7 @@ input[type="range"] {
 }
 
 .dot.done { background: var(--ok); border-color: var(--ok); color: #fff; }
+.dot.partial { border-color: var(--ok); color: var(--ok); }
 .dot.current { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* 恢复会话卡片 */
@@ -326,6 +343,117 @@ th { color: var(--muted); font-weight: 600; }
 
 tr.right td:last-child { color: var(--ok); }
 tr.wrong td:last-child { color: var(--bad); }
+
+/* 把握度校准 */
+.legend-marker.legend-conf { color: var(--accent); }
+.legend-marker.legend-acc { color: var(--ok); }
+.legend-marker.legend-off { color: var(--danger); }
+
+.calib-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.calib-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.calib-label {
+  flex: none;
+  width: 3rem;
+  text-align: right;
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.calib-track {
+  position: relative;
+  flex: 1;
+  height: 26px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.calib-track.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.calib-empty { color: var(--muted); font-size: 0.8rem; }
+
+/* 95% 精确置信区间横条（两端竖线封口） */
+.calib-ci {
+  position: absolute;
+  top: 50%;
+  height: 8px;
+  transform: translateY(-50%);
+  background: rgba(79, 140, 255, 0.3);
+  border-left: 2px solid var(--accent);
+  border-right: 2px solid var(--accent);
+  border-radius: 2px;
+}
+
+/* 实际正确率点 */
+.calib-acc {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  transform: translateY(-50%);
+  background: var(--ok);
+  border-radius: 50%;
+}
+
+/* 自评把握度标记（菱形）；未落入区间时标红突出 */
+.calib-conf {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  transform: translateY(-50%) rotate(45deg);
+  background: var(--accent);
+  border-radius: 2px;
+}
+
+.calib-conf.off {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px rgba(224, 92, 92, 0.35);
+}
+
+/* 共用 0～100% 横轴 */
+.calib-axis {
+  position: relative;
+  flex: 1;
+  height: 1.3rem;
+}
+
+.calib-tick {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 5px;
+  background: var(--muted);
+}
+
+.calib-tick-label {
+  position: absolute;
+  top: 6px;
+  transform: translateX(-50%);
+  font-size: 0.7rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 把握度未落入区间的档位在表格中同步标红 */
+tr.miscal td:first-child { color: var(--danger); font-weight: 700; }
 
 footer {
   text-align: center;

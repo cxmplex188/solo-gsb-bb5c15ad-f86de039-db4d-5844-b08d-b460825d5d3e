@@ -106,12 +106,21 @@
             <button id="btnAnsA">X = A</button>
             <button id="btnAnsB">X = B</button>
           </div>
+          <p class="conf-title">把握度（50% = 纯靠猜，100% = 确定无疑）</p>
+          <div class="conf-btns" role="group" aria-label="把握度选择">
+            <button class="conf-btn" data-conf="50">50%</button>
+            <button class="conf-btn" data-conf="60">60%</button>
+            <button class="conf-btn" data-conf="70">70%</button>
+            <button class="conf-btn" data-conf="80">80%</button>
+            <button class="conf-btn" data-conf="90">90%</button>
+            <button class="conf-btn" data-conf="100">100%</button>
+          </div>
         </div>
 
         <div id="progress" class="progress" aria-label="答题进度"></div>
 
         <button id="btnSubmit" class="danger" disabled>提交并揭晓答案</button>
-        <p class="hint">提示：在 A / B / X 之间切换时，播放位置与暂停状态保持不变，可开启「切换淡化」让新旧音源等功率平滑交接；可用「设为入点 / 设为出点」循环试听某一片段，切换音源、换题或拖动进度后循环依然有效；可随时返回已答题目修改答案，提交后一次性揭晓。</p>
+        <p class="hint">提示：每题需同时选择「X = A / X = B」和把握度（50%～100%，每 10% 一档）才算完成，二者都会随题保存，可随时返回修改；在 A / B / X 之间切换时，播放位置与暂停状态保持不变，可开启「切换淡化」让新旧音源等功率平滑交接；可用「设为入点 / 设为出点」循环试听某一片段，切换音源、换题或拖动进度后循环依然有效；全部题目完成后提交，一次性揭晓并按把握度分档给出实际正确率与 95% 精确置信区间。</p>
       </div>
     </section>
 
@@ -122,11 +131,23 @@
         <p id="scoreLabel" class="score"></p>
         <table id="resultTable">
           <thead>
-            <tr><th>题号</th><th>X 实际是</th><th>你的答案</th><th>判定</th></tr>
+            <tr><th>题号</th><th>X 实际是</th><th>你的答案</th><th>把握度</th><th>判定</th></tr>
           </thead>
           <tbody></tbody>
         </table>
         <button id="btnAgain" class="primary">再来一轮</button>
+      </div>
+
+      <div class="card">
+        <h2>把握度校准</h2>
+        <p class="hint">按自评把握度分档统计。所有元素共用同一条 0～100% 横轴：<span class="legend-marker legend-conf">◆</span> 为自评把握度，<span class="legend-marker legend-acc">●</span> 为该档实际正确率，横条为 95% Clopper–Pearson 精确置信区间（服务端数值反解，非正态近似）。把握度标记未落入区间时<span class="legend-marker legend-off">◆</span>标红：在区间右侧说明过度自信，在左侧说明信心不足；没有题目的档位显示「无数据」。</p>
+        <div id="calibChart" class="calib-chart"></div>
+        <table id="calibTable">
+          <thead>
+            <tr><th>把握度</th><th>题数</th><th>答对</th><th>实际正确率</th><th>95% 置信区间</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
       </div>
     </section>
   </main>

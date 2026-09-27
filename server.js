@@ -22,6 +22,10 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 24 * 3600 * 1000);
 const MAX_TRIALS = 50;
 
+// 把握度档位：50%～100%，每 10% 一档（以百分数整数存储）
+const CONFIDENCE_LEVELS = [50, 60, 70, 80, 90, 100];
+const CONFIDENCE_SET = new Set(CONFIDENCE_LEVELS);
+
 const ALLOWED_EXT = new Set([
   '.wav', '.mp3', '.flac', '.ogg', '.oga',
   '.m4a', '.aac', '.opus', '.webm', '.aif', '.aiff',
@@ -93,6 +97,99 @@ function clampInt(value, min, max, fallback) {
   return Math.min(max, Math.max(min, n));
 }
 
+// ---------------------------------------------------------------------------
+// Clopper–Pearson 精确置信区间（服务端数值反解，不用正态近似）
+//
+// 对每档 n 题中答对 k 题，答对数 Y ~ Bin(n, p)：
+//   下界 p_lo 为方程 P(Y ≥ k | p) = 0.025 的解（k = 0 时 p_lo = 0）
+//   上界 p_hi 为方程 P(Y ≤ k | p) = 0.025 的解（k = n 时 p_hi = 1）
+// 两个尾概率关于 p 单调，用二分法反解，概率绝对误差 ≤ 5e-7（要求 1e-6 之内）。
+// ---------------------------------------------------------------------------
+
+/** 二项系数对数 log C(n, k)：逐项累加，避免阶乘溢出 */
+function logBinomCoef(n, k) {
+  let s = 0;
+  for (let i = 1; i <= k; i++) s += Math.log((n - k + i) / i);
+  return s;
+}
+
+/** 单点概率 P(Y = i)，Y ~ Bin(n, p)；按对数计算避免下溢 */
+function binomPmf(n, i, p) {
+  if (p <= 0) return i === 0 ? 1 : 0;
+  if (p >= 1) return i === n ? 1 : 0;
+  return Math.exp(logBinomCoef(n, i) + i * Math.log(p) + (n - i) * Math.log(1 - p));
+}
+
+/** 上尾概率 P(Y ≥ k) */
+function binomUpperTail(n, k, p) {
+  let s = 0;
+  for (let i = k; i <= n; i++) s += binomPmf(n, i, p);
+  return s;
+}
+
+/** 下尾概率 P(Y ≤ k) */
+function binomLowerTail(n, k, p) {
+  let s = 0;
+  for (let i = 0; i <= k; i++) s += binomPmf(n, i, p);
+  return s;
+}
+
+const CP_ALPHA = 0.025;    // 双侧 95%：每侧 2.5%
+const CP_PROB_TOL = 5e-7;  // 概率反解容差（规格要求 ≤ 1e-6，留一倍余量）
+
+/**
+ * 在 (0, 1) 上二分反解 tail(p) = target。
+ * tail 关于 p 严格单调；increasing 指明单调方向。概率绝对误差 ≤ CP_PROB_TOL。
+ */
+function solveBinomProb(target, tail, increasing) {
+  let lo = 0;
+  let hi = 1;
+  for (let iter = 0; iter < 200; iter++) {
+    const mid = (lo + hi) / 2;
+    const v = tail(mid);
+    if (Math.abs(v - target) <= CP_PROB_TOL) return mid;
+    if ((v < target) === increasing) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
+/** Clopper–Pearson 95% 精确区间：n 次伯努利试验成功 k 次，返回 [下界, 上界] */
+function clopperPearson(n, k) {
+  const lower = k === 0 ? 0
+    : solveBinomProb(CP_ALPHA, (p) => binomUpperTail(n, k, p), true);
+  const upper = k === n ? 1
+    : solveBinomProb(CP_ALPHA, (p) => binomLowerTail(n, k, p), false);
+  return [lower, upper];
+}
+
+/**
+ * 把握度校准：按 6 个把握度档位分组统计。
+ * 每档返回 { confidence, n, k, accuracy, ci, covered }；
+ * 空档 n = 0，accuracy / ci / covered 为 null（前端显示「无数据」）。
+ * covered 表示自评把握度是否落入该档 95% 精确置信区间。
+ */
+function buildCalibration(trials) {
+  return CONFIDENCE_LEVELS.map((confidence) => {
+    const group = trials.filter((t) => t.confidence === confidence);
+    const n = group.length;
+    if (n === 0) {
+      return { confidence, n: 0, k: 0, accuracy: null, ci: null, covered: null };
+    }
+    const k = group.filter((t) => t.x === t.answer).length;
+    const ci = clopperPearson(n, k);
+    const p = confidence / 100;
+    return {
+      confidence,
+      n,
+      k,
+      accuracy: k / n,
+      ci,
+      covered: p >= ci[0] && p <= ci[1],
+    };
+  });
+}
+
 function removeDir(dir) {
   if (dir) fs.rm(dir, { recursive: true, force: true }, () => {});
 }
@@ -115,6 +212,7 @@ app.post('/api/session', (req, res) => {
     const trials = Array.from({ length: numTrials }, () => ({
       x: crypto.randomInt(2) === 0 ? 'A' : 'B',
       answer: null,
+      confidence: null,
     }));
 
     // 恢复标识：高熵随机 token，仅哈希存内存，明文只下发给本机浏览器一次
@@ -160,13 +258,14 @@ app.get('/api/session/:id', (req, res) => {
     id: s.id,
     numTrials: s.trials.length,
     answers: s.trials.map((t) => t.answer),
+    confidences: s.trials.map((t) => t.confidence),
     submitted: s.submitted,
     results: s.submitted ? s.results : undefined,
   });
 });
 
 // 会话恢复：凭恢复标识找回未提交会话的非敏感状态。
-// 只返回题数与已选答案，绝不包含 X 映射；已提交/删除/过期的会话一律 404。
+// 只返回题数、已选答案与把握度，绝不包含 X 映射；已提交/删除/过期的会话一律 404。
 app.post('/api/session/recover', (req, res) => {
   const token = req.body && typeof req.body.token === 'string' ? req.body.token : '';
   const s = token ? sessions.get(recoveryTokens.get(hashToken(token))) : null;
@@ -177,6 +276,7 @@ app.post('/api/session/recover', (req, res) => {
     id: s.id,
     numTrials: s.trials.length,
     answers: s.trials.map((t) => t.answer),
+    confidences: s.trials.map((t) => t.confidence),
     submitted: false,
   });
 });
@@ -219,11 +319,23 @@ app.post('/api/session/:id/answer', (req, res) => {
   const s = getSession(req, res);
   if (!s) return;
   if (s.submitted) return res.status(409).json({ error: '已提交，不可再修改答案' });
-  const { trial, answer } = req.body || {};
+  const { trial, answer, confidence } = req.body || {};
   const t = s.trials[trial];
   if (!t) return res.status(400).json({ error: '题号无效' });
-  if (answer !== 'A' && answer !== 'B') return res.status(400).json({ error: '答案无效' });
-  t.answer = answer;
+  const hasAnswer = answer !== undefined && answer !== null;
+  const hasConfidence = confidence !== undefined && confidence !== null;
+  if (!hasAnswer && !hasConfidence) {
+    return res.status(400).json({ error: '缺少答案或把握度' });
+  }
+  // 答案与把握度可分开更新，但各自必须合法；两项都齐全后才允许提交
+  if (hasAnswer && answer !== 'A' && answer !== 'B') {
+    return res.status(400).json({ error: '答案无效' });
+  }
+  if (hasConfidence && !CONFIDENCE_SET.has(confidence)) {
+    return res.status(400).json({ error: '把握度无效（只允许 50%～100%，每 10% 一档）' });
+  }
+  if (hasAnswer) t.answer = answer;
+  if (hasConfidence) t.confidence = confidence;
   res.json({ ok: true });
 });
 
@@ -231,14 +343,15 @@ app.post('/api/session/:id/submit', (req, res) => {
   const s = getSession(req, res);
   if (!s) return;
   if (s.submitted) return res.json({ results: s.results }); // 幂等：重复提交返回同一结果
-  if (s.trials.some((t) => !t.answer)) {
-    return res.status(400).json({ error: '还有未作答的题目，无法提交' });
+  if (s.trials.some((t) => !t.answer || t.confidence === null)) {
+    return res.status(400).json({ error: '还有题目未作答或未选择把握度，无法提交' });
   }
-  // 提交后一次性揭示：正确率 + 逐题映射
+  // 提交后一次性揭示：正确率 + 逐题映射（含把握度）+ 分档校准
   const detail = s.trials.map((t, i) => ({
     trial: i + 1,
     x: t.x,
     answer: t.answer,
+    confidence: t.confidence,
     correct: t.x === t.answer,
   }));
   const correct = detail.filter((d) => d.correct).length;
@@ -247,6 +360,7 @@ app.post('/api/session/:id/submit', (req, res) => {
     correct,
     accuracy: correct / detail.length,
     detail,
+    calibration: buildCalibration(s.trials),
   };
   s.submitted = true;
   dropRecoveryToken(s); // 提交后恢复标识立即失效
