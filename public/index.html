@@ -106,12 +106,21 @@
             <button id="btnAnsA">X = A</button>
             <button id="btnAnsB">X = B</button>
           </div>
+          <p class="conf-label">对本题答案的把握度（50% = 纯猜，100% = 完全确定）</p>
+          <div class="conf-btns" role="group" aria-label="把握度">
+            <button class="conf-btn" data-conf="50">50%</button>
+            <button class="conf-btn" data-conf="60">60%</button>
+            <button class="conf-btn" data-conf="70">70%</button>
+            <button class="conf-btn" data-conf="80">80%</button>
+            <button class="conf-btn" data-conf="90">90%</button>
+            <button class="conf-btn" data-conf="100">100%</button>
+          </div>
         </div>
 
         <div id="progress" class="progress" aria-label="答题进度"></div>
 
         <button id="btnSubmit" class="danger" disabled>提交并揭晓答案</button>
-        <p class="hint">提示：在 A / B / X 之间切换时，播放位置与暂停状态保持不变，可开启「切换淡化」让新旧音源等功率平滑交接；可用「设为入点 / 设为出点」循环试听某一片段，切换音源、换题或拖动进度后循环依然有效；可随时返回已答题目修改答案，提交后一次性揭晓。</p>
+        <p class="hint">提示：在 A / B / X 之间切换时，播放位置与暂停状态保持不变，可开启「切换淡化」让新旧音源等功率平滑交接；可用「设为入点 / 设为出点」循环试听某一片段，切换音源、换题或拖动进度后循环依然有效；每题须同时选择答案与把握度才可提交，可随时返回已答题目修改，提交后一次性揭晓。</p>
       </div>
     </section>
 
@@ -122,11 +131,23 @@
         <p id="scoreLabel" class="score"></p>
         <table id="resultTable">
           <thead>
-            <tr><th>题号</th><th>X 实际是</th><th>你的答案</th><th>判定</th></tr>
+            <tr><th>题号</th><th>X 实际是</th><th>你的答案</th><th>把握度</th><th>判定</th></tr>
           </thead>
           <tbody></tbody>
         </table>
         <button id="btnAgain" class="primary">再来一轮</button>
+      </div>
+
+      <div class="card">
+        <h2>把握度校准</h2>
+        <p class="hint">按作答时选择的把握度分档，展示各档题数、实际正确率及 95% Clopper–Pearson 精确置信区间（服务端按二项分布精确反解，非正态近似）。同一 0～100% 横轴上：竖线标记 = 该档把握度，圆点 = 实际正确率，横线 = 置信区间；把握度标记落在区间之外时以红色突出显示，说明该档主观信心与实际表现不符。</p>
+        <div id="calChart" class="cal-chart" role="img" aria-label="把握度校准图"></div>
+        <table id="calTable">
+          <thead>
+            <tr><th>把握度</th><th>题数</th><th>答对</th><th>实际正确率</th><th>95% 置信区间</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
       </div>
     </section>
   </main>

@@ -280,6 +280,32 @@ input[type="range"] {
   color: #fff;
 }
 
+/* 把握度选择 */
+.conf-label {
+  margin: 0.9rem 0 0.5rem !important;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.conf-btns {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.4rem;
+}
+
+.conf-btn {
+  padding: 0.55rem 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.conf-btn.selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
 /* 进度圆点 */
 .progress {
   display: flex;
@@ -326,6 +352,71 @@ th { color: var(--muted); font-weight: 600; }
 
 tr.right td:last-child { color: var(--ok); }
 tr.wrong td:last-child { color: var(--bad); }
+
+/* 把握度校准 */
+.cal-chart {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem;
+}
+
+.cal-chart svg { display: block; }
+
+.cal-grid { stroke: var(--border); stroke-width: 1; }
+
+.cal-tick {
+  fill: var(--muted);
+  font-size: 11px;
+  text-anchor: middle;
+}
+
+.cal-axislabel {
+  fill: var(--muted);
+  font-size: 11px;
+  text-anchor: middle;
+}
+
+.cal-ylabel {
+  fill: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  text-anchor: end;
+}
+
+.cal-nodata {
+  fill: var(--muted);
+  font-size: 11px;
+  text-anchor: middle;
+  opacity: 0.7;
+}
+
+.cal-ci {
+  stroke: var(--muted);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.cal-acc {
+  fill: var(--accent);
+  stroke: #fff;
+  stroke-width: 1;
+}
+
+.cal-conf {
+  stroke: var(--ok);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.cal-conf.outside {
+  stroke: var(--bad);
+  stroke-width: 4;
+}
+
+tr.cal-outside td { color: var(--bad); }
+tr.cal-empty td { color: var(--muted); }
 
 footer {
   text-align: center;

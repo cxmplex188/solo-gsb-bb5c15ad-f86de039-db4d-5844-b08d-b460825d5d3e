@@ -24,6 +24,7 @@ const $ = (sel) => document.querySelector(sel);
 
 let session = null;          // { id, numTrials, recoveryToken }
 let answers = [];            // 每题 'A' | 'B' | null
+let confidences = [];        // 每题 50/60/.../100 | null（与答案一起保存、修改、恢复）
 let currentTrial = 0;
 
 // ---------------------------------------------------------------------------
@@ -479,24 +480,30 @@ function renderTrial() {
   $('#btnAnsA').classList.toggle('selected', ans === 'A');
   $('#btnAnsB').classList.toggle('selected', ans === 'B');
 
-  // 进度圆点
+  const conf = confidences[currentTrial];
+  document.querySelectorAll('.conf-btn').forEach((b) => {
+    b.classList.toggle('selected', Number(b.dataset.conf) === conf);
+  });
+
+  // 进度圆点：答案与把握度两项齐全才算完成
   const progress = $('#progress');
   progress.innerHTML = '';
   for (let i = 0; i < session.numTrials; i++) {
     const dot = document.createElement('button');
     dot.className = 'dot';
-    if (answers[i]) dot.classList.add('done');
+    if (answers[i] && confidences[i]) dot.classList.add('done');
     if (i === currentTrial) dot.classList.add('current');
     dot.textContent = i + 1;
     dot.addEventListener('click', () => loadTrial(i));
     progress.appendChild(dot);
   }
 
-  const allAnswered = answers.every(Boolean);
-  $('#btnSubmit').disabled = !allAnswered;
-  $('#btnSubmit').textContent = allAnswered
+  // 两项齐全才可提交
+  const remaining = answers.filter((a, i) => !a || !confidences[i]).length;
+  $('#btnSubmit').disabled = remaining > 0;
+  $('#btnSubmit').textContent = remaining === 0
     ? '提交并揭晓答案'
-    : `提交并揭晓答案（还剩 ${answers.filter((a) => !a).length} 题未答）`;
+    : `提交并揭晓答案（还剩 ${remaining} 题未答或未选把握度）`;
 }
 
 function tick() {
@@ -592,6 +599,7 @@ $('#btnStart').addEventListener('click', async () => {
 
     session = data;
     answers = Array(data.numTrials).fill(null);
+    confidences = Array(data.numTrials).fill(null);
     currentTrial = 0;
     xCache.clear();
     saveRecovery(); // 保存恢复标识，刷新/重开页面可找回本会话
@@ -625,9 +633,9 @@ async function initRecovery() {
       token: saved.token,
       trial: Math.min(Math.max(0, saved.trial | 0), data.numTrials - 1),
     };
-    const answered = data.answers.filter(Boolean).length;
+    const answered = data.answers.filter((a, i) => a && data.confidences[i]).length;
     $('#resumeInfo').textContent =
-      `检测到本机有未提交的测试：共 ${data.numTrials} 题，已答 ${answered} 题，` +
+      `检测到本机有未提交的测试：共 ${data.numTrials} 题，已完成 ${answered} 题，` +
       `上次进行到第 ${pendingResume.trial + 1} 题。`;
     $('#view-resume').classList.remove('hidden');
   } catch (_) {
@@ -648,6 +656,7 @@ $('#btnResume').addEventListener('click', async () => {
       recoveryToken: resume.token,
     };
     answers = resume.answers.slice();
+    confidences = resume.confidences.slice();
     currentTrial = resume.trial;
     xCache.clear();
     await enterTest();
@@ -738,13 +747,17 @@ $('#crossfadeMs').addEventListener('change', (e) => {
 $('#btnPrev').addEventListener('click', () => { if (currentTrial > 0) loadTrial(currentTrial - 1); });
 $('#btnNext').addEventListener('click', () => { if (currentTrial < session.numTrials - 1) loadTrial(currentTrial + 1); });
 
-async function sendAnswer(val) {
-  answers[currentTrial] = val;
-  renderTrial();
+// 答案与把握度一起保存：任意一项变更后，两项齐全即整体提交到服务端
+async function saveAnswer() {
+  const trial = currentTrial;
   const res = await fetch(`/api/session/${session.id}/answer`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ trial: currentTrial, answer: val }),
+    body: JSON.stringify({
+      trial,
+      answer: answers[trial],
+      confidence: confidences[trial],
+    }),
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -752,8 +765,24 @@ async function sendAnswer(val) {
   }
 }
 
-$('#btnAnsA').addEventListener('click', () => sendAnswer('A'));
-$('#btnAnsB').addEventListener('click', () => sendAnswer('B'));
+function selectAnswer(val) {
+  answers[currentTrial] = val;
+  renderTrial();
+  if (confidences[currentTrial]) saveAnswer();
+}
+
+function selectConfidence(val) {
+  confidences[currentTrial] = val;
+  renderTrial();
+  if (answers[currentTrial]) saveAnswer();
+}
+
+$('#btnAnsA').addEventListener('click', () => selectAnswer('A'));
+$('#btnAnsB').addEventListener('click', () => selectAnswer('B'));
+
+document.querySelectorAll('.conf-btn').forEach((b) => {
+  b.addEventListener('click', () => selectConfidence(Number(b.dataset.conf)));
+});
 
 $('#btnSubmit').addEventListener('click', async () => {
   if (!confirm('提交后将一次性揭晓全部答案，且不可再修改。确定提交？')) return;
@@ -775,6 +804,7 @@ $('#btnAgain').addEventListener('click', async () => {
   }
   session = null;
   answers = [];
+  confidences = [];
   xCache.clear();
   clearRecovery();
   buffers.A = buffers.B = buffers.X = null;
@@ -805,10 +835,122 @@ function showResults(results) {
     tr.className = d.correct ? 'right' : 'wrong';
     tr.innerHTML =
       `<td>${d.trial}</td><td>${d.x}</td><td>${d.answer}</td>` +
+      `<td>${d.confidence}%</td>` +
       `<td>${d.correct ? '✓ 正确' : '✗ 错误'}</td>`;
     tbody.appendChild(tr);
   }
+  renderCalibration(results.calibration);
   show('view-result');
+}
+
+// ---------------------------------------------------------------------------
+// 把握度校准图：同一 0～100% 横轴上，每档一行（100% 在上，50% 在下）
+//   ── 横线：95% Clopper–Pearson 精确置信区间
+//   ● 圆点：该档实际正确率
+//   │ 竖线：该档把握度标记（落在区间之外时红色突出显示）
+// ---------------------------------------------------------------------------
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function svgEl(tag, attrs, parent) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  if (parent) parent.appendChild(el);
+  return el;
+}
+
+function svgText(parent, x, y, text, cls) {
+  const t = svgEl('text', { x, y, class: cls }, parent);
+  t.textContent = text;
+  return t;
+}
+
+function renderCalibration(calibration) {
+  const fmtPct = (v) => `${(v * 100).toFixed(1)}%`;
+
+  // 数据表（空档显示无数据）
+  const tbody = $('#calTable tbody');
+  tbody.innerHTML = '';
+  for (const c of calibration) {
+    const tr = document.createElement('tr');
+    if (c.n === 0) {
+      tr.className = 'cal-empty';
+      tr.innerHTML = `<td>${c.confidence}%</td><td colspan="4">无数据</td>`;
+    } else {
+      const outside = c.confidence / 100 < c.lower || c.confidence / 100 > c.upper;
+      if (outside) tr.className = 'cal-outside';
+      tr.innerHTML =
+        `<td>${c.confidence}%</td><td>${c.n}</td><td>${c.k}</td>` +
+        `<td>${fmtPct(c.accuracy)}</td>` +
+        `<td>${fmtPct(c.lower)} ～ ${fmtPct(c.upper)}</td>`;
+    }
+    tbody.appendChild(tr);
+  }
+
+  // 校准图（SVG）
+  const W = 560, ML = 56, MR = 16, MT = 14, MB = 30;
+  const PW = W - ML - MR;                    // 绘图区宽度
+  const rows = calibration.slice().reverse(); // 100% 档在最上
+  const rowH = 34;
+  const H = MT + MB + rows.length * rowH;
+  const px = (v) => ML + v * PW;             // 0～1 → 横坐标
+  const py = (i) => MT + i * rowH + rowH / 2;
+
+  const host = $('#calChart');
+  host.innerHTML = '';
+  const svg = svgEl('svg', {
+    viewBox: `0 0 ${W} ${H}`,
+    width: '100%',
+    preserveAspectRatio: 'xMidYMid meet',
+  }, host);
+
+  // 竖网格线与横轴刻度（0%、25%、50%、75%、100%）
+  for (const v of [0, 0.25, 0.5, 0.75, 1]) {
+    svgEl('line', {
+      x1: px(v), y1: MT, x2: px(v), y2: H - MB, class: 'cal-grid',
+    }, svg);
+    svgText(svg, px(v), H - MB + 15, `${v * 100}%`, 'cal-tick');
+  }
+  svgText(svg, ML + PW / 2, H - 4, '比例（把握度 / 正确率）', 'cal-axislabel');
+
+  rows.forEach((c, i) => {
+    const y = py(i);
+    svgText(svg, ML - 8, y + 4, `${c.confidence}%`, 'cal-ylabel');
+
+    if (c.n === 0) {
+      // 空档：无数据
+      svgText(svg, px(0.5), y + 4, '无数据', 'cal-nodata');
+      return;
+    }
+
+    const conf = c.confidence / 100;
+    const outside = conf < c.lower || conf > c.upper;
+
+    // 置信区间横线 + 端点
+    svgEl('line', {
+      x1: px(c.lower), y1: y, x2: px(c.upper), y2: y, class: 'cal-ci',
+    }, svg);
+    for (const v of [c.lower, c.upper]) {
+      svgEl('line', {
+        x1: px(v), y1: y - 5, x2: px(v), y2: y + 5, class: 'cal-ci',
+      }, svg);
+    }
+
+    // 实际正确率圆点
+    const dot = svgEl('circle', {
+      cx: px(c.accuracy), cy: y, r: 5, class: 'cal-acc',
+    }, svg);
+    svgEl('title', {}, dot).textContent =
+      `实际正确率 ${fmtPct(c.accuracy)}（${c.k}/${c.n}）`;
+
+    // 把握度标记（竖线）；落在区间之外时红色突出显示
+    const mark = svgEl('line', {
+      x1: px(conf), y1: y - 9, x2: px(conf), y2: y + 9,
+      class: outside ? 'cal-conf outside' : 'cal-conf',
+    }, svg);
+    svgEl('title', {}, mark).textContent =
+      `把握度 ${c.confidence}%${outside ? '（落在置信区间之外）' : ''}`;
+  });
 }
 
 // 启动 UI 刷新循环，并探测本机是否有可恢复的未提交会话
